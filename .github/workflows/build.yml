@@ -1,0 +1,96 @@
+# build.yml — 启动器仓库的 CI（业主 2026-11-22，待办 T-34）
+#
+# 两件事：
+#   1. static  ：启动页 JS 语法、version.json 格式、**素材政策**（仓库里不许出现媒体/二进制）
+#   2. compile ：在 Windows runner 上用 .NET Framework 自带的 csc 真编译一次宿主
+#
+# 素材政策说明：WebView2 SDK 与 game.ico 都是**运行时从外部取**，不入库 ——
+# CI 里现场从 nuget.org 下载 SDK（同 build-launcher.ps1 的 host\lib 约定），图标没有就不带。
+# 这里**只验证能编译**，不上传任何 exe 产物（exe 里带游戏图标，属美术资源，不公开发布）。
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'launcher-host/**'
+      - 'launcher/**'
+      - 'build-launcher.ps1'
+      - '.github/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 启动页 JS 语法
+        run: |
+          set -e
+          for f in launcher/*.js; do
+            echo "-- $f"
+            node --check "$f"
+          done
+      - name: version.json 格式
+        run: |
+          node -e "
+            const v = require('./launcher/version.json');
+            if (!/^\d+\.\d+\.\d+$/.test(String(v.launcher))) {
+              console.error('launcher 版本号必须是 x.y.z，现在是：' + v.launcher);
+              process.exit(1);
+            }
+            console.log('launcher ' + v.launcher);
+          "
+      - name: 素材政策（仓库里不该有媒体/二进制）
+        run: |
+          bad=$(git ls-files | grep -Ei '\.(png|jpe?g|webp|gif|bmp|ico|mp3|ogg|wav|flac|ttf|otf|woff2?|dll|exe|zip|7z|rar)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::以下文件不该入库（美术资源/二进制）："
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK：仓库内没有媒体/二进制文件"
+
+  compile:
+    name: 编译宿主（Windows + csc）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 取 WebView2 SDK（不入库）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = '1.0.3351.48'
+          $zip = Join-Path $env:RUNNER_TEMP 'wv2.zip'
+          $dir = Join-Path $env:RUNNER_TEMP 'wv2'
+          Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$ver" -OutFile $zip -TimeoutSec 120
+          Expand-Archive $zip -DestinationPath $dir -Force
+          New-Item -ItemType Directory -Force host\lib | Out-Null
+          Copy-Item "$dir\lib\net462\Microsoft.Web.WebView2.Core.dll" host\lib\ -Force
+          Copy-Item "$dir\lib\net462\Microsoft.Web.WebView2.WinForms.dll" host\lib\ -Force
+          Copy-Item "$dir\runtimes\win-x64\native\WebView2Loader.dll" host\lib\ -Force
+          Get-ChildItem host\lib | Select-Object Name, Length
+      - name: 编译
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1 -Out "$env:RUNNER_TEMP\Stronghold.exe"
+          if ($LASTEXITCODE -ne 0) { throw "build-launcher.ps1 exit $LASTEXITCODE" }
+      - name: 产物冒烟检查（PE 头 + 体积）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-Item "$env:RUNNER_TEMP\Stronghold.exe"
+          if ($exe.Length -lt 30000) { throw "产物只有 $($exe.Length) B，可能没编译成功" }
+          $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "不是 PE 文件（缺 MZ 头）" }
+          "PE OK · {0:N0} B" -f $exe.Length
