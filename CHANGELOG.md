@@ -1,7 +1,8 @@
 # 变更记录
 
 > 只记「已经落地」和「明确计划中」两类，不写推测。
-> 每条都带可核对的锚点：提交号、文件行号、产物大小、验证命令。
+> 每条都带三样东西：**改了什么 / 为什么必须改（问题与证据）/ 不改的后果**。
+> 可核对锚点：提交号、文件行号、产物大小、验证命令。
 
 ---
 
@@ -12,53 +13,67 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | `github.com/wisadel429/stronghold-launcher` |
-| 提交 | `98e1dac`（功能）→ `385e524`（打包） |
+| 提交 | `98e1dac`（功能）→ `385e524`（打包）→ `c9c8471`（本文档） |
 | 版本 | `launcher/version.json` 1.1.0 → 1.1.2 |
 | 产物 | `Stronghold.exe` 430,080 B → 431,104 B → **431,616 B** |
 | 发版 | Release `launcher-20261122-1`（zip + manifest） |
-| 一句话 | 把启动器从「侵权游戏专用客户端」改回「通用本地游戏容器」，并让热更真的能跑 |
+
+### 本轮改动由三类原因驱动
+
+| 类别 | 要解决的问题 | 对应改动 |
+|---|---|---|
+| **法律解耦** | 启动器被写成「侵权游戏的专用客户端」：硬编码它的服务器、把它的仓库当更新源、提供一键开公网服 | 删 `ServerOrigin`、改 `GitHubPkgBase`、公告源配置化、改文案 |
+| **工程正确性** | 改了源码但 exe 没重编（改动根本没生效）；打包脚本用旧副本打出旧包；会误杀玩家机器上的进程 | 重编 exe、迁移打包脚本、`KillPortOwner` 白名单、补 `update-channel.json` |
+| **文档真实性** | 文档写的路径与代码实际行为不一致，接手的人会按错的路径排查 | 重写 README 热更小节、补使用说明、加公告政策 |
+
+---
 
 ### 1.1 提交 `98e1dac` — 功能与解耦
 
-| 文件 | 改动 | 目的 |
-|---|---|---|
-| `launcher-host/Program.cs` | 删除 `ServerOrigin = "http://8.134.50.56:3000"`，热更源改为**只走 GitHub** | 启动器不再指向自有服务器 |
-| 同上 | `GitHubPkgBase` 由 `stronghold-protocol-fusion` 改为 **`stronghold-launcher`** | 更新通道不再绑在游戏项目上 |
-| 同上 | 新增 `AnnouncementSources()`：读 `data/announcement-source.json`；缺文件 → 只读 `127.0.0.1:3000`；`enabled:false` → 完全不联网；只认 http/https | 公告源配置化，地址不进代码 |
-| 同上 | 公告拉取加 4 秒超时 + 256KB 上限 + 失败静默 | 服务器挂了不影响启动 |
-| 同上 | `Host.JsonStringArray()` | 读配置里的 `urls` 数组 |
-| 同上 | 新增 `Host.IsOwnGameProcess()`；`KillPortOwner` 只杀**进程名为 node 且路径在已登记游戏目录/启动器目录下**的进程，否则跳过 | 不再误杀玩家机器上的其它软件 |
-| 同上 | 重启服务器时若 `killed == 0`，回报「端口被其他程序占用，已跳过」 | 让用户知道该自己关 |
-| `launcher/app.js` | `NOTICE_SOURCES` 改为 `127.0.0.1:3000`；清理注释里的旧 IP 与已停用域名 | 页面兜底源不指向外网 |
-| `launcher/index.html` | 「部署公开服务器」→「开服并打开后台」；「未部署」→「未开服」 | 文案与实际行为一致（该按钮只是 `StartLocal + 打开 /admin`） |
-| `launcher/app.js` | 「正在部署公开服务器」→「正在开服」；「已部署」→「已开服」 | 同上 |
-| `launcher/version.json` | 1.1.0 → 1.1.1 → 1.1.2 | 区分新旧包 |
-| `README.md` | 重写「热更新」小节（只从本仓库 Release 取）；新增「公告」小节 | 文档与代码一致 |
-| `NOTICE.md` | 新增「公告政策」：只接受纯文本，不含官方美术/截图/下载链接/收款码；不发送账号/设备/存档；源地址不进代码 | 把边界写成书面条款 |
+| 文件·位置 | 改动 | 原因（问题与证据） | 不改的后果 |
+|---|---|---|---|
+| `Program.cs` 原 1234 行（**已删除**） | 删除 `ServerOrigin = "http://8.134.50.56:3000"`，热更改单源走 GitHub | 启动器把自有服务器当主更新源，等于**专门为一款未经授权的游戏配套分发**。法律上这是「明知 + 具体帮助」的证据，会让「仓库分离」的抗辩失效 | 启动器始终是侵权链条的一环；且服务器一挂，热更就废 |
+| `Program.cs` 1274 行 | `GitHubPkgBase` 由 `stronghold-protocol-fusion` 改为 `stronghold-launcher` | 更新源仍指向**游戏项目仓库**，等于把启动器的发版通道挂在侵权项目名下；发一次启动器更新要跨仓库操作 | 法律耦合没切断；发版流程依赖错误仓库 |
+| `Program.cs` `AnnouncementSources()` | 公告地址移入 `data/announcement-source.json`；缺文件读 `127.0.0.1`；`enabled:false` 不联网；只认 http/https | 硬编码 IP 意味着**换服/换域名就要重编译**，而分发出去的 exe 无法远程改；同时所有玩家的包里都带着你的服务器地址 | 地址写死、改一次要重新发 exe；分发版等于替你的服务器打广告 |
+| 同上 | 公告拉取超时由默认 **6 秒缩短到 4 秒**（256KB 上限沿用） | 公告源不可达时，启动页每次启动都要等满超时；4 秒是「国内公网够用」与「失败别拖慢启动」之间的折中 | 服务器宕机时启动明显变慢 |
+| `Host.JsonStringArray()` | 新增 | 配置里是 `"urls": [...]` 数组，现有的 `JsonValue` 只解析带引号的单值，读不了数组 | 配置永远解析为空 → 公告功能静默失效 |
+| `Host.IsOwnGameProcess()` + `KillPortOwner` | 只杀「进程名为 node 且路径在已登记游戏目录/启动器目录下」的进程，否则跳过 | 原实现会结束**任意**占用 3000 端口的进程。这是在**玩家自己的机器**上做的操作：误杀其它软件既是民事风险，也很容易被杀软判成流氓行为 | 玩家机器上可能被误杀 Docker、其它开发服务器等；一旦被投诉，性质比「功能不好用」严重得多 |
+| `RestartLocalServer` | `killed == 0` 时回报「端口被其他程序占用，已跳过」 | 跳过之后若还接着 `StartLocal`，用户只会看到「起不来」，不知道原因 | 用户排查无门，会以为是启动器坏了 |
+| `launcher/app.js` `NOTICE_SOURCES` | 兜底源改为 `127.0.0.1:3000`，并清掉注释里的旧 IP 与已停用域名 | 页面本身也有一个直连公告地址，只改宿主等于没改干净；注释里的 `8.134.50.56` 随热更包发给所有玩家 | 分发包里仍带着你的服务器地址与已废弃域名 |
+| `launcher/index.html` 77/82/85 行 | 「部署公开服务器」→「开服并打开后台」；「未部署」→「未开服」；「部署并打开后台」→「开服并打开后台」 | 实际行为是 `StartLocal(false)` + 打开 `/admin`（`Program.cs` 596 行），**不做任何公网映射**。文案写着「部署公开服务器」属于自我标注为「公开部署」，既误导用户，也是不必要的法律标签 | 用户以为点了就对外网开放；同时给自己贴了一个不需要的标签 |
+| `launcher/app.js` 59/70/117/124/392 行 | 「正在部署公开服务器」→「正在开服」；「已部署」→「已开服」 | 与上一条同一处行为，必须同步，否则加载文案与实际不符 | 文案自相矛盾 |
+| `launcher/version.json` | 1.1.0 → 1.1.1 → 1.1.2 | exe 与页面都改了，但版本号没动；玩家无法区分新旧，回滚时也分不清包 | 无法判断某个玩家装的是哪一版 |
+| `README.md` | 重写「热更新」小节；新增「公告」小节 | 原文档写「检查顺序：自有服务器 → 域名 → GitHub Release 兜底」，而代码早已改成单源；给接手人的是**错误路径** | 排查时会去查根本不存在的链路 |
+| `NOTICE.md` | 新增「公告政策」 | 公告是启动器**唯一**联网点，必须把边界写成条款（纯文本、不含官方素材/下载链接/收款码、不发送账号与设备信息、源地址不进代码） | 边界只存在于口头，出事时没有任何书面依据 |
+
+---
 
 ### 1.2 提交 `385e524` — 打包与发布
 
-| 文件 | 改动 | 目的 |
-|---|---|---|
-| `publish-launcher-pkg.ps1`（**新增**，171 行） | 从**本仓库** `launcher/` 打热更包，发布到 `stronghold-launcher` 的 Release；产物落 `dist/launcher-pkg/` | 不再从游戏目录的旧副本打包（曾因此打出旧页面） |
-| `.gitignore` | 加 `dist/` | 打包产物不入库 |
-| `E:\stronghold\Stronghold-Protocol-v0.3.3-Fusion\publish-launcher-pkg.ps1` | 改为**转发脚本**（显式转参给上面那个） | 防止误用旧入口 |
-| `Stronghold-Launcher\data\announcement-source.json` | `enabled:true` + 自有服务器地址（**仅本机**） | 你的机器保留公告 |
-| `Stronghold-Launcher\data\announcement-source.dist.json` | `enabled:false`（**发给玩家用**） | 分发版默认不联网拉公告 |
-| `Stronghold-Launcher\data\update-channel.json` | `enabled:true` | 打开「页面代码」热更（GitHub） |
+| 文件 | 改动 | 原因（问题与证据） | 不改的后果 |
+|---|---|---|---|
+| `publish-launcher-pkg.ps1`（新增 171 行） | 从**本仓库** `launcher/` 打包，发布到 `stronghold-launcher` 的 Release | 原脚本在游戏目录里，打的是**游戏目录下那份 `launcher/` 副本**。启动器独立成仓库后，那份副本不会跟着更新 → 打出旧页面。2026-11-22 已因此踩过一次「热更完界面还是旧的」 | 玩家热更成功但界面没变，而且日志显示一切正常 |
+| `.gitignore` 加 `dist/` | 打包产物不入库 | `dist/` 里是 zip + manifest，属于构建产物；入库会让仓库体积随每次发版增长，且容易与源码不同步 | 仓库膨胀、产物与源码版本对不上 |
+| 游戏目录 `publish-launcher-pkg.ps1` | 改为**转发脚本**（显式逐个转参） | 两个入口必然有一个被误用；留着旧实现就是留一个「会打出旧包」的按钮 | 下次还是可能从游戏目录打包 |
+| `data/announcement-source.json` | `enabled:true` + 自有服务器地址（**仅本机**） | 作者自己的机器需要能收公告；但**分发版不能带这个地址** | 分发版会把作者服务器地址发给所有人 |
+| `data/announcement-source.dist.json` | `enabled:false` + 空 `urls` | 遵守「分发版默认关闭、地址不进代码」的口径；这也符合代码的 fail-closed 设计 | 分发版默认联网拉公告，且指向不明 |
+| `data/update-channel.json` | `enabled:true` | `UpdateChannelEnabled()` 是 fail-closed：文件不存在 = 关闭。原分发包**根本没有 `data/` 目录**，所以热更一直是关的，而 `使用说明.txt` 却写着「本机为 true」 | 热更功能表面存在、实际从不检查；文档还在骗人 |
 
-### 1.3 发布与验证
+---
 
-| 检查 | 结果 |
+### 1.3 那一串验证不是走过场——每条都对应一个踩过的坑
+
+| 检查 | 为什么必须做 |
 |---|---|
-| `git push` | `458a274..385e524 → main`，`HEAD == origin/main == 385e524` |
-| Release | tag `launcher-20261122-1`，资产 `launcher-pkg.zip`(31,284 B) + `launcher-pkg-manifest.json`(552 B) |
-| manifest 的 zip 地址 | `.../releases/latest/download/launcher-pkg.zip`（绝对地址，`latest` 可解析） |
-| 实际下载 zip 的 sha256 | `c26e4f24…89715`，与 manifest 一致 |
-| zip 结构 | `launcher-pkg-src\launcher\{app.js,index.html,loading.html,style.css}`（宿主剥顶层后落进 `launcher/` 白名单） |
-| C# 编译 | `csc` exit 0（改前/改后各一次） |
-| JS 语法 | `node --check` exit 0 |
-| exe 字符串审计 | 含 `8.134.50.56`：**否**；含 `stronghold-protocol-fusion`：**否**；含 `stronghold-launcher`：**是**；含 `announcement-source.json`：**是** |
+| `csc` 编译 exit 0 | 上一次是**源码改了、exe 没重编**：`Program.cs` 改于 18:24:46，而 exe 建于 18:14:09。字符串审计发现 exe 里还留着旧路径 `launcher-pkg/manifest.json` —— 改动根本没进包。只看源码会以为已经上线 |
+| `node --check` exit 0 | `app.js` 正是热更的主体。语法错会让启动页白屏，而热更**没有回滚机制**，玩家只能重装 |
+| exe 字符串审计（UTF-16 字节级搜索） | 证明「删掉的常量真的没进二进制」。`[Text.Encoding]::Unicode.GetString(全部字节)` 会因偏移错位漏检，必须按 UTF-16 模式在字节流里搜 |
+| zip 结构检查 | 宿主 `UnzipFiltered` 会**无条件剥掉第一段路径**（`slash > 0 ? Substring(slash+1)`），再按 `launcher/` 白名单校验。所以 zip 必须多包一层 `launcher-pkg-src/`，否则剥完变成 `app.js`，一条都写不进去，最终报「包里没有可更新的文件」 |
+| manifest 里 zip 用绝对地址 | GitHub 下 manifest 与 zip 同目录，用相对路径 `/launcher-pkg/...` 会 404；`ResolveUrl` 只在自有服务器那套里成立 |
+| 下载后**实算** sha256 比对 | 「上传成功」不等于「内容正确」。宿主 `ShaOk` 校验不符会直接拒装，且只在日志里留一行 |
+| `releases/latest` 解析 | `latest` 只认「最新非预发布」。一旦错打成 `prerelease`，latest 会继续指向旧包，热更拿到旧版本号 → 表现为「永远提示有更新」或「永远不更新」 |
+
+---
 
 ### 1.4 回滚点
 
@@ -73,30 +88,30 @@
 
 ## 2026-11-22 · 列表站（`stronghold-server-list`）
 
-> **状态：计划中，尚未实施。** 当前线上仍为 `87b61c0`，`servers.json` 14 条均无「非营利」字段。
+> **状态：计划中，尚未实施。** 当前线上仍为 `87b61c0`。
 
-### 2.1 已核实的事实
+### 2.1 为什么要做这组改动
 
-| 项 | 结果 |
+| 事实 | 法律含义 |
 |---|---|
-| 收录数量 | 14 条，14 条 `enabled: true` |
-| 备注/标签里出现「赞助/收费/打赏/广告/付费/会员/卖」 | **0 条** |
-| `servers.json` 是否记录非营利状态 | 否 |
-| README 是否有收录门槛 | 否 |
-| 页面是否有免费公示 | 否 |
+| 14 个服全部免费 | 「帮信罪」（刑法 287 条之二）要求**上游存在犯罪**；免费 → 上游不构成 217 条「以营利为目的」的侵犯著作权罪 → **没有上游犯罪，帮信罪不成立** |
+| 但免费 ≠ 不侵权 | 民事帮助侵权（民法典 1169 条）只要求「他人实施**侵权行为**」，不要求构成犯罪 → **免费不消灭帮助侵权与停止侵害义务** |
+| 站点没有任何非营利记录 | 被问「凭什么说 14 个都免费」时，手上没有任何证据。帮信罪的核心是「**明知**」，有规则 + 有确认 + 有复核 + 有下架记录 = 尽到注意义务；什么都没有 = 「应当知道却放任」 |
+
+一句话：**免费这个事实已经成立，但它在法律上还算不上证据。** A–E 就是把事实变成证据。
 
 ### 2.2 待实施改动（A–E）
 
-| 项 | 文件 | 锚点 | 内容 |
-|---|---|---|---|
-| A | `servers.json` | 14 条 `"enabled": true` 后 | 加 `nonProfit: true`、`nonProfitConfirmedAt`、`nonProfitBasis` |
-| B | `server.mjs` | **383 行**（`rowFromInput`，367 行起） | 追加 3 行字段白名单；**不改则后台一保存就丢字段** |
-| C | `public/admin.html` | **254 / 357 / 458** | 复选框 + 确认日期 + 确认依据 + 提交字段 |
-| D | `public/index.html` | **508–511**（`<footer class="rl-footer">`） | 页脚加「只收录免费服 / 举报即下架」公示 |
-| E | `README.md` | 末尾 + 第 7 条已知坑 | 新增「收录规则」6 条 |
+| 项 | 文件·锚点 | 改动 | 原因 | 不改的后果 |
+|---|---|---|---|---|
+| A | `servers.json`，14 条 `"enabled": true` 后 | 加 `nonProfit: true`、`nonProfitConfirmedAt`、`nonProfitBasis` | 把口头结论落成**数据**，可被 `/api/servers` 与页面读取，也是留痕的索引 | 非营利状态只存在于你的记忆里 |
+| B | `server.mjs` **383 行**（`rowFromInput`，367 行起） | 白名单里追加 3 个字段 | 该函数是**按字段逐个重建对象**的，不在白名单里的字段会被丢掉 | 你哪天在后台点一下保存，14 条非营利字段**静默消失** |
+| C | `public/admin.html` **254 / 357 / 458** | 复选框 + 确认日期 + 确认依据 + 提交字段 | 不加就只能手改 JSON，违背「管理页可直接改」的设计；且手改更容易格式出错 | 新增一个服就得开编辑器，且没有统一格式 |
+| D | `public/index.html` **508–511**（`<footer class="rl-footer">`） | 页脚加「只收录免费服 / 举报即下架」公示 | 向**第三人可见**的善意，比事后解释强；同时给权利人一个下架入口 | 「我不知道有人收费」缺乏任何公开依据 |
+| E | `README.md` 末尾 + 第 7 条已知坑 | 收录规则 6 条 + 改写「只收免费服」 | 规则是复核的依据；没有规则就没有「违反」，也就没有下架的理由 | 想下架一个收费服时说不出依据 |
 
 > `serversPayload()`（596 行）用 `...srv` 展开，**不用改**。
-> 注：早期草稿把该函数误称为 `normalizeRow`，实际名为 `rowFromInput`。
+> 勘误：早期草稿把该函数误称为 `normalizeRow`，实际名为 `rowFromInput`。
 
 ### 2.3 上线步骤（未执行）
 
@@ -108,13 +123,13 @@
 
 ## 待办
 
-| # | 事项 | 归属 |
+| # | 事项 | 原因 |
 |---|---|---|
-| 1 | 收集 14 份服主「免费」书面确认截图，存 `data/confirmations/<id>-<日期>.png` | 需人工 |
-| 2 | 列表站 A–E 实施 | 待确认 |
-| 3 | 发给玩家的包用 `announcement-source.dist.json` 覆盖同名文件 | 打包时 |
-| 4 | 打包分发前删除 `Stronghold.exe.bak-*` | 打包时 |
-| 5 | `HANDOFF-2026-11-22.md` 第 1465 行令牌为明文，建议改占位符或到 GitHub 轮换 | 安全 |
+| 1 | 收集 14 份服主「免费」书面确认，存 `data/confirmations/<id>-<日期>.png` | 字段只记录「已确认」，截图才是证据本体；没有截图，`nonProfitBasis` 是空话 |
+| 2 | 列表站 A–E 实施 | 见 2.1 |
+| 3 | 发给玩家的包用 `announcement-source.dist.json` 覆盖同名文件 | 防止把作者服务器地址发给所有人 |
+| 4 | 打包分发前删除 `Stronghold.exe.bak-*` | 备份文件带旧逻辑，不该随包发出 |
+| 5 | `HANDOFF-2026-11-22.md` 第 1465 行令牌改为占位符或轮换 | 明文令牌在 18 万字的运维手册里，分享文档即泄露 |
 
 ---
 
