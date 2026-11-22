@@ -34,3 +34,6 @@ admin-password.json
 admin-update-key.json
 node_modules/
 _webview-data/
+
+# CI 里现场下载的 WebView2 SDK（不入库）
+host/lib/
