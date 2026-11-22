@@ -11,12 +11,12 @@
   //
   // 宿主 Stronghold.exe 的实测规则（见 launcher.log 的 enter server / nav 记录）：
   //   · 只给**裸域名**（无协议头、无端口）→ 它自己走 https://域名/，不会塞端口   ✅
-  //   · 给了协议头或端口 → 它按「游戏服地址」处理，强制补成 http://主机:3000     ❌（mon3tr.fun:80 → http://mon3tr.fun:3000）
+  //   · 给了协议头或端口 → 它按「游戏服地址」处理，强制补成 http://主机:3000     ❌（example.com:80 → http://example.com:3000）
   // 所以这里做的是：**去掉协议头**，保留 主机[:端口]，其余一概不加。
-  //   mon3tr.fun            → mon3tr.fun        → 宿主开 https://mon3tr.fun/
-  //   https://mon3tr.fun    → mon3tr.fun        → 同上
-  //   8.134.50.56           → 8.134.50.56       → 宿主开 http://8.134.50.56:3000（游戏服默认端口）
-  //   8.134.50.56:3000      → 8.134.50.56:3000  → 原样
+  //   example.com            → example.com        → 宿主开 https://example.com/
+  //   https://example.com    → example.com        → 同上
+  //   192.0.2.10           → 192.0.2.10       → 宿主开 http://192.0.2.10:3000（游戏服默认端口）
+  //   192.0.2.10:3000      → 192.0.2.10:3000  → 原样
   function normalizeAddr(input) {
     let v = String(input || '').replace(/\s+/g, '');
     if (!v) return '';
@@ -56,7 +56,7 @@
     $('loadingBack').hidden = true;
     $('loadingBar').style.width = '4%';
     $('loadingTitle').textContent = title || '正在启动服务器';
-    $('loadingStep').textContent = title === '正在启动服务器' || title === '正在部署公开服务器'
+    $('loadingStep').textContent = title === '正在启动服务器' || title === '正在开服'
       ? '正在检查本地服务器…'
       : '正在检查可用列表…';
     $('loadingTime').textContent = '0.0s';
@@ -67,7 +67,7 @@
       $('loadingTime').textContent = tick.toFixed(1) + 's';
     }, 100);
     let i = 0;
-    $('loadingTip').textContent = title === '正在启动服务器' || title === '正在部署公开服务器'
+    $('loadingTip').textContent = title === '正在启动服务器' || title === '正在开服'
       ? TIPS[0]
       : '正在从列表里找到可用节点';
     clearInterval(tipTimer);
@@ -114,14 +114,14 @@
     if (versionState.items.length >= 2) {
       pkOpen('version', (id) => {
         state.busy = true;
-        showLoading('正在部署公开服务器');
+        showLoading('正在开服');
         post({ t: 'version-active', id });
         post({ t: 'start-public' });
       });
       return;
     }
     state.busy = true;
-    showLoading('正在部署公开服务器');
+    showLoading('正在开服');
     post({ t: 'start-public' });
   }
 
@@ -187,7 +187,7 @@
     setAddrStatus('wait', '正在连接 ' + addr + ' …');
     $('remoteState').textContent = '状态：连接中…';
 
-    // 业主 2026-11-21：宿主对手动地址会强制拼 :3000（https://mon3tr.fun → http://mon3tr.fun:3000），
+    // 业主 2026-11-21：宿主对手动地址会强制拼 :3000（https://example.com → http://example.com:3000），
     // 所以这里**先由页面自己跳转**（WebView2 会原样打开 https/http 地址）；
     // 若宿主拦截了这次导航（页面还在、1.2 秒后没走），再回退到宿主原来的 start-remote。
     const target = fullUrlOf(addr);
@@ -389,7 +389,7 @@
       state.busy = false;
       hideLoading();
       $('publicCard').classList.add('is-on');
-      $('publicState').textContent = data.ok === false ? '状态：已启动（旧进程没有后台）' : '状态：已部署';
+      $('publicState').textContent = data.ok === false ? '状态：已启动（旧进程没有后台）' : '状态：已开服';
       $('localCard').classList.add('is-on');
       $('localState').textContent = '状态：已启动';
       if (data.lan) $('lanUrls').textContent = data.lan;
@@ -451,7 +451,7 @@
   }
 
   // ---------- 邀请粘贴（业主 2026-11-21）----------
-  // 玩家从群里复制的邀请通常是一整段：「https://mon3tr.fun/?room=9680 某某邀请你加入…【绝境模拟】」。
+  // 玩家从群里复制的邀请通常是一整段：「https://example.com/?room=9680 某某邀请你加入…【绝境模拟】」。
   // 这里只取网址里的 room= 房间号，存进 localStorage('sp.launcher.room')；
   // 点「本地游戏 / 服务器游玩」时，loading.html 会把它拼到要跳转的地址上，进游戏后自动加入该房间。
   const ROOM_RE = /[?&#]\s*room\s*=\s*([A-Za-z0-9]{4,6})/i;
@@ -545,12 +545,13 @@
   }
 
 
-  // 内容统一在 8.134.50.56 的后台管理（/admin → 公告 → 弹窗公告 → 写 data/announcement.json）。
-  // 启动器页是 https://app.local，直接 fetch http://… 会被当成混合内容拦掉，
-  // 所以优先让**宿主代为请求**（{t:'fetch'} → {t:'fetch-ok'}）；宿主不支持时退回直接 fetch。
+  // 公告源：**启动器只做「拉公告」这一件事**。
+  // 主路径是宿主推送（{t:'announcement'}）：宿主读 data/announcement-source.json 的地址代取后回传
+  // （页面跑在 https://app.local，直接 fetch http:// 会被当混合内容拦掉）。
+  // 下面这个列表只是兜底，默认只留本机游戏服；要换源请改配置，不要改代码。
+  // 公告正文只放纯文本：不放官方美术/截图、下载链接、收款码（见 NOTICE.md）。
   const NOTICE_SOURCES = [
-    'http://8.134.50.56:3000/api/announcement',
-    // mon3tr.fun 已停用（业主 2026-11-22，域名另作他用）→ 不再作为公告来源
+    'http://127.0.0.1:3000/api/announcement',
   ];
   // history：服务端 /api/announcement 给的**历史公告**（新的在前）
   // shown  ：当前正文正在显示的那一条（可能是历史里的旧公告，也可能是最新那条）

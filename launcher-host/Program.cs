@@ -1230,17 +1230,14 @@ namespace StrongholdLauncher
             });
         }
 
-        /// <summary>自有服务器（IP，不用域名 —— 域名换手等于把代码供源交出去）。</summary>
-        private const string ServerOrigin = "http://8.134.50.56:3000";
-
         /// <summary>
-        /// 查「启动器页面」通道：自有服务器优先（国内实测 9 MB/s），连不上/下载失败才落到 GitHub Release
-        /// （实测 63 KB/s，但服务器挂了也能更）。**游戏代码通道已关闭，这里不再有第二条。**
+        /// 查「启动器页面」通道。业主 2026-11-22 最终口径：**全部走 GitHub Release**（自有服务器不再参与更新）。
+        /// 好处：更新与游戏服务器彻底解耦，服务器挂了/换机都不影响；代价是国内拉取慢（实测 63 KB/s，
+        /// 30 KB 的页面包几秒内下完，可以接受）。manifest 用 Release 里的绝对地址版。
         /// </summary>
         private void CheckLauncherChannel()
         {
-            var ghManifest = GitHubPkgBase + "/launcher-pkg-manifest.json";
-            var sources = new[] { ServerOrigin + "/launcher-pkg/manifest.json", ghManifest };
+            var sources = new[] { GitHubPkgBase + "/launcher-pkg-manifest.json" };
             for (int i = 0; i < sources.Length; i++)
             {
                 var src = sources[i];
@@ -1273,8 +1270,13 @@ namespace StrongholdLauncher
             Program.Log("manifest unreachable");
         }
 
-        /// <summary>GitHub Release 的稳定地址：latest 永远指向最新一版，不需要 API、不吃速率限制。</summary>
-        private const string GitHubPkgBase = "https://github.com/wisadel429/stronghold-protocol-fusion/releases/latest/download";
+        /// <summary>
+        /// GitHub Release 的稳定地址：latest 永远指向最新一版，不需要 API、不吃速率限制。
+        /// **必须是启动器自己的仓库**（stronghold-launcher），不能指向游戏项目仓库
+        /// —— 否则启动器的更新通道就跟游戏项目绑在一起，等于「专门为它配套的客户端」。
+        /// 发版时把 `launcher-pkg-manifest.json` 与 `launcher-pkg.zip` 一起挂到该 Release 上。
+        /// </summary>
+        private const string GitHubPkgBase = "https://github.com/wisadel429/stronghold-launcher/releases/latest/download";
 
         private sealed class UpdateInfo
         {
@@ -1397,24 +1399,28 @@ namespace StrongholdLauncher
                 // 业主 2026-11-22 决定：允许结束占用端口的进程再重启，这样服务端改动也能一键生效。
                 var killed = Host.KillPortOwner(ActivePort, Program.Log);
                 Program.Log("restart: killed " + killed + " process(es) on port " + ActivePort);
+                if (killed == 0) Send("{\"t\":\"status\",\"text\":\"端口 " + ActivePort + " 被其他程序占用，已跳过（不会结束别人的进程），请先关闭它\"}");
                 Thread.Sleep(800);
             }
             StartLocal(false);
         }
 
 
+        /// <summary>
+        /// 公告源：**只做「拉公告」这一件事** —— 不发身份、不上传、不碰本地文件。
+        /// 地址在 `data/announcement-source.json`：{"enabled":true,"urls":["https://…/announcement.json"]}
+        /// 文件不存在 → 退回本机 127.0.0.1:3000；enabled=false → 完全不联网。
+        /// 公告只放纯文本：不含官方美术/截图、下载链接、收款码（见 NOTICE.md）。
+        /// </summary>
         private void StartAnnouncementPrefetch()
         {
             Task.Run(delegate
             {
-                var urls = new[]
-                {
-                    "http://8.134.50.56:3000/api/announcement",
-                    // mon3tr.fun 已停用（业主 2026-11-22），不再从该域名取公告
-                };
+                var urls = AnnouncementSources();
+                if (urls.Length == 0) { Program.Log("announcement disabled"); return; }
                 foreach (var url in urls)
                 {
-                    var body = Host.FetchText(url, 256 * 1024);
+                    var body = Host.FetchText(url, 256 * 1024, 4000);
                     if (string.IsNullOrEmpty(body)) continue;
                     if (body.IndexOf("\"announcement\":null", StringComparison.Ordinal) >= 0) { Program.Log("announcement none @" + url); return; }
                     Program.Log("announcement ok @" + url + " (" + body.Length + "B)");
@@ -1423,6 +1429,37 @@ namespace StrongholdLauncher
                 }
                 Program.Log("announcement unreachable");
             });
+        }
+
+        /// <summary>
+        /// 读公告源配置。只允许 http/https；多条按顺序试，第一条有内容就用。
+        /// 启动器除了这一条 GET 之外，不向该地址发送任何东西（不带账号、不带设备号、不带存档）。
+        /// </summary>
+        private static string[] AnnouncementSources()
+        {
+            var fallback = new[] { "http://127.0.0.1:3000/api/announcement" };
+            var file = Path.Combine(Program.Root, "data", "announcement-source.json");
+            try
+            {
+                if (!File.Exists(file)) return fallback;
+                var raw = File.ReadAllText(file, Encoding.UTF8);
+                if (!Host.JsonBool(raw, "enabled", true)) return new string[0];
+                var list = Host.JsonStringArray(raw, "urls");
+                var ok = new System.Collections.Generic.List<string>();
+                foreach (var u in list)
+                {
+                    if (u.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                        || u.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ok.Add(u);
+                    else Program.Log("announcement source ignored (not http/https): " + u);
+                }
+                if (ok.Count == 0) Program.Log("announcement source empty -> disabled");
+                return ok.ToArray();
+            }
+            catch (Exception e)
+            {
+                Program.Log("announcement config failed: " + e.Message);
+                return fallback;
+            }
         }
 
 
@@ -1555,6 +1592,38 @@ namespace StrongholdLauncher
                 i++;
             }
             return sb.ToString();
+        }
+
+        /// <summary>读 JSON 字符串数组（`"urls": ["a","b"]`）；缺失或非法返回空数组。</summary>
+        public static string[] JsonStringArray(string json, string key)
+        {
+            var none = new string[0];
+            if (string.IsNullOrEmpty(json)) return none;
+            var marker = "\"" + key + "\"";
+            var i = json.IndexOf(marker, StringComparison.Ordinal);
+            if (i < 0) return none;
+            var lb = json.IndexOf('[', i + marker.Length);
+            if (lb < 0) return none;
+            var rb = json.IndexOf(']', lb);
+            if (rb < 0) return none;
+            var list = new System.Collections.Generic.List<string>();
+            var p = lb + 1;
+            while (p < rb)
+            {
+                if (json[p] != '"') { p++; continue; }
+                var sb = new StringBuilder();
+                p++;
+                while (p < rb && json[p] != '"')
+                {
+                    if (json[p] == '\\' && p + 1 < rb) { p++; sb.Append(json[p]); }
+                    else sb.Append(json[p]);
+                    p++;
+                }
+                p++;
+                var s = sb.ToString().Trim();
+                if (s.Length > 0) list.Add(s);
+            }
+            return list.ToArray();
         }
 
         public static string SetJsonString(string json, string key, string value)
@@ -1794,7 +1863,34 @@ namespace StrongholdLauncher
             return count;
         }
 
-        /// <summary>结束占用指定端口的进程（只结束监听该端口的那个 PID）。返回结束的进程数。</summary>
+        /// <summary>
+        /// 只认「自己拉起的 node」：进程名必须是 node，且可执行文件在已登记的游戏目录或启动器目录下。
+        /// 为什么要有这道闸：以前这里会结束**任意**占用该端口的进程 —— 玩家机器上误杀其它软件，
+        /// 既是民事风险，也很容易被杀软判成流氓行为。宁可起不来、报错让用户自己关。
+        /// </summary>
+        private static bool IsOwnGameProcess(Process p)
+        {
+            try
+            {
+                if (!string.Equals(p.ProcessName, "node", StringComparison.OrdinalIgnoreCase)) return false;
+                string path;
+                try { path = p.MainModule.FileName; }
+                catch { return false; }   // 提权/跨位数读不到模块信息，一律不杀
+                if (string.IsNullOrEmpty(path)) return false;
+                var root = Program.Root.TrimEnd('\\') + "\\";
+                if (path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return true;
+                foreach (var e in VersionStore.Entries)
+                {
+                    if (e == null || string.IsNullOrEmpty(e.Dir)) continue;
+                    var dir = e.FullDir.TrimEnd('\\') + "\\";
+                    if (path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>结束占用指定端口的进程（只结束监听该端口的那个 PID，且只认自己拉起的 node）。返回结束的进程数。</summary>
         public static int KillPortOwner(int port, Action<string> log)
         {
             var killed = 0;
@@ -1839,6 +1935,11 @@ namespace StrongholdLauncher
                     try
                     {
                         var victim = Process.GetProcessById(procId);
+                        if (!IsOwnGameProcess(victim))
+                        {
+                            log("port " + port + " owner is not our node, skip: pid " + procId + " (" + victim.ProcessName + ")");
+                            continue;
+                        }
                         log("kill port " + port + " owner: pid " + procId + " (" + victim.ProcessName + ")");
                         victim.Kill();
                         victim.WaitForExit(3000);

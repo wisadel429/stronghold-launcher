@@ -40,13 +40,24 @@ powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1
 - 每个版本**独立目录、独立端口、独立 `data/`**（账号与存档不互通）
 - 支持**同时运行多个版本**（端口不冲突即可）
 - 启动页的「游戏版本」区块可导入目录、开服/停止、切换当前版本、移除；
-  点击「本地游戏 / 部署公开服务器」时若有两个以上版本，会先弹窗选版本
+  点击「本地游戏 / 开服并打开后台」时若有两个以上版本，会先弹窗选版本
 
 ## 热更新
 
 - 启动器代码走 `launcher-pkg`（manifest + zip + sha256，只收 `.js/.mjs/.css/.html/.md`）
-- 检查顺序：自有服务器 → 域名 → **GitHub Release 兜底**
+- **只从本仓库（`stronghold-launcher`）的 GitHub Release 取**，不再连任何自有服务器；
+  发版时把 `launcher-pkg-manifest.json` 与 `launcher-pkg.zip` 挂到该 Release
+- 只覆盖 `launcher/` 目录，解压侧按扩展名 + 目录双白名单强制；exe 不参与热更
 - 宿主固定启用 TLS 1.2+ 并**绕过系统自动代理**（否则国内环境下会卡十几秒）
+- 总开关在 `data/update-channel.json`，缺失即关闭（fail-closed）
+
+## 公告
+
+启动器联网**只做这一件事**：GET 一个公告 JSON。
+
+- 地址在 `data/announcement-source.json`：`{"enabled": true, "urls": ["…"]}`；缺失则只读本机 `127.0.0.1:3000`
+- 不发送账号、设备标识、存档或任何用户数据；`enabled:false` 即完全不联网
+- 公告只放纯文本：不含官方美术、截图、下载链接、收款码（见 NOTICE.md「公告政策」）
 
 ## 版本号口径
 
