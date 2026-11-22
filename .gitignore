@@ -1,0 +1,36 @@
+# 只存代码：美术/音频/字体/图标/二进制一律不入库
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.ico
+*.svg
+*.mp3
+*.ogg
+*.wav
+*.m4a
+*.ttf
+*.otf
+*.woff
+*.woff2
+*.zip
+*.7z
+*.exe
+*.dll
+*.pdb
+
+# 运行时产物与私有数据（绝不入库）
+launcher.log
+_run.out.log
+_run.err.log
+data/
+packed/
+launcher-config.json
+launcher-versions.json
+launcher-window.json
+admin-password.json
+admin-update-key.json
+node_modules/
+_webview-data/
