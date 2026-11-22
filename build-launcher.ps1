@@ -20,11 +20,14 @@ if (-not (Test-Path -LiteralPath $csc)) { $csc = Join-Path $env:WINDIR 'Microsof
 if (-not (Test-Path -LiteralPath $csc)) { throw '找不到 .NET Framework 编译器 csc.exe（需要 Windows 自带的 .NET Framework 4.x）' }
 
 # WebView2 SDK：优先本目录 host\lib，其次游戏安装目录、launcher-host-build
+# 注意：`-GameRoot` 是可选的，不传时**不能**把空字符串喂给 Join-Path（PS 5.1 会直接抛
+# "Cannot bind argument to parameter 'Path' because it is an empty string"，CI 上就是这么挂的）
 $dllDirs = @(
   (Join-Path $here 'host\lib'),
-  (Join-Path $here 'launcher-host-build'),
-  (Join-Path $GameRoot 'launcher-host-build')
-) | Where-Object { $_ -and (Test-Path $_) }
+  (Join-Path $here 'launcher-host-build')
+)
+if ($GameRoot) { $dllDirs += (Join-Path $GameRoot 'launcher-host-build') }
+$dllDirs = $dllDirs | Where-Object { $_ -and (Test-Path $_) }
 
 $core = $null; $winforms = $null
 foreach ($d in $dllDirs) {
@@ -35,7 +38,8 @@ foreach ($d in $dllDirs) {
 if (-not $core) { throw '缺少 WebView2 SDK：把 Microsoft.Web.WebView2.Core.dll / .WinForms.dll 放到 host\lib 或游戏安装目录' }
 
 if (-not $Out) { $Out = Join-Path $here 'Stronghold.exe' }
-$icon = Join-Path $GameRoot 'launcher\game.ico'
+# 图标同样可选：没给 -GameRoot 就当作「没有图标」处理（Test-Path '' 也会报错，所以先判空）
+$icon = if ($GameRoot) { Join-Path $GameRoot 'launcher\game.ico' } else { '' }
 $src = Join-Path $here 'launcher-host\Program.cs'
 if (-not (Test-Path $src)) { throw "找不到宿主源码：$src" }
 
@@ -47,7 +51,7 @@ $cscArgs = @(
   "/r:$core", "/r:$winforms",
   $src
 )
-if (Test-Path $icon) { $cscArgs = @("/win32icon:$icon") + $cscArgs } else { Write-Host '  提示：没有 game.ico，本次不带图标' -ForegroundColor Yellow }
+if ($icon -and (Test-Path $icon)) { $cscArgs = @("/win32icon:$icon") + $cscArgs } else { Write-Host '  提示：没有 game.ico，本次不带图标' -ForegroundColor Yellow }
 
 Write-Host '  csc ' -NoNewline
 & $csc @cscArgs
