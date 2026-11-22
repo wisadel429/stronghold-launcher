@@ -37,3 +37,6 @@ _webview-data/
 
 # CI 里现场下载的 WebView2 SDK（不入库）
 host/lib/
+
+# 打包产物（热更包 zip + 清单，不入库）
+dist/
